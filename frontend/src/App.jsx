@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Activity, AlertTriangle, BarChart3, Check, ChevronDown, ClipboardCheck,
-  Database, Download, FileDiff, FileSpreadsheet, FlaskConical, FolderOpen,
-  Languages, LayoutDashboard, Menu, RefreshCw, RotateCcw, Search, ShieldCheck,
-  SlidersHorizontal, Upload, X, XCircle,
+  Activity, AlertTriangle, BarChart3, Bot, Check, ChevronDown, ClipboardCheck,
+  CornerDownRight, Database, Download, ExternalLink, FileDiff, FileSpreadsheet,
+  FlaskConical, FolderOpen, Globe, Languages, LayoutDashboard, Menu, MessageSquare,
+  RefreshCw, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles,
+  Upload, User, X, XCircle,
 } from 'lucide-react'
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  analyzeFiles, compareAreas, downloadExport, downloadSample, explainQuestion,
-  getHealth, getRecord, getSampleMetadata, recheckFinding, runChallenge,
+  analyzeFiles, chatExplain, chatMessage, compareAreas, downloadExport,
+  downloadSample, explainQuestion, getHealth, getRecord, getSampleMetadata,
+  recheckFinding, runChallenge,
 } from './api/client'
 import {
   findingMetric, formatNumber, formatPercent, formatTimestamp, reconcileCounts,
@@ -41,6 +43,7 @@ function App() {
   const [notice, setNotice] = useState(null)
   const [loading, setLoading] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
 
   const checkHealth = useCallback(async (signal) => {
     try {
@@ -133,12 +136,70 @@ function App() {
           {page === 'areas' && <Areas analysis={workspace.analysis} />}
           {page === 'records' && <Records analysis={workspace.analysis} onError={setError} />}
           {page === 'counterfactual' && <Counterfactual analysis={workspace.analysis} saved={workspace.counterfactual} onSave={(value) => setWorkspace((s) => ({ ...s, counterfactual: value }))} onError={setError} />}
-          {page === 'assistant' && <Assistant analysis={workspace.analysis} selectedFinding={workspace.selectedFinding} onError={setError} />}
+          {page === 'assistant' && <Assistant analysis={workspace.analysis} selectedFinding={workspace.selectedFinding} onError={setError} onOpenChat={() => setChatOpen(true)} />}
           {page === 'benchmark' && <Benchmark onError={setError} />}
           {page === 'reports' && <Reports analysis={workspace.analysis} onError={setError} />}
         </div>
       </main>
+      <ErrorBoundary>
+        <InsightAssistantChat
+          analysis={workspace.analysis}
+          isOpen={chatOpen}
+          onToggle={() => setChatOpen((v) => !v)}
+          onNavigate={navigate}
+          onLoadSample={loadSample}
+          isAppLoading={loading}
+        />
+      </ErrorBoundary>
       {resetOpen && <ConfirmDialog onCancel={() => setResetOpen(false)} onConfirm={resetWorkspace} />}
+    </div>
+  )
+}
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('ErrorBoundary caught an error:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '16px', margin: '16px', background: '#fee2e2', border: '1px solid #f87171', borderRadius: '8px', color: '#991b1b', zIndex: 1000, position: 'relative' }}>
+          <h4 style={{ margin: '0 0 6px', fontSize: '14px' }}>Component Error</h4>
+          <p style={{ margin: '0 0 10px', fontSize: '12px' }}>{this.state.error?.message || 'An unexpected rendering error occurred.'}</p>
+          <button
+            className="button secondary sm"
+            onClick={() => this.setState({ hasError: false, error: null })}
+          >
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function ConfirmDialog({ onCancel, onConfirm }) {
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+        <h2>Reset Workspace</h2>
+        <p>Are you sure you want to clear the current analysis and files? This will reset all loaded data.</p>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button className="button secondary sm" onClick={onCancel}>Cancel</button>
+          <button className="button danger sm" onClick={onConfirm}>Reset</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -265,7 +326,7 @@ function Counterfactual({ analysis, saved, onSave, onError }) {
   return <section className="page-section"><PageIntro eyebrow="COUNTERFACTUAL AUDIT LAB" title="Change the comparison lens" text="This tool recomputes an area comparison using the backend's supplied rates and thresholds. It does not establish cause." /><Panel title="Simulation inputs"><div className="form-grid"><label>Area<select value={area} onChange={(event) => setArea(event.target.value)}>{analysis.area_comparison?.map((item) => <option key={item.area_id}>{item.area_id}</option>)}</select></label><label>Comparison method<select value={method} onChange={(event) => setMethod(event.target.value)}><option value="all_areas">All other areas</option><option value="similar_areas">Similar areas</option></select></label><label>Threshold (percentage points)<input type="number" min="0.01" step="0.01" value={threshold} onChange={(event) => setThreshold(event.target.value)} /></label></div><button className="button primary" onClick={run}><SlidersHorizontal size={17} /> Run comparison</button></Panel>{saved && <Panel title="Result"><div className="result-banner"><strong>{saved.new_comparison?.flagged ? 'Flagged under this comparison' : 'Not flagged under this comparison'}</strong><span>{saved.explanation}</span></div>{saved.warnings?.map((warning) => <div className="inline-warning" key={warning}><AlertTriangle size={15} />{warning}</div>)}<div className="metric-grid compact-grid"><MetricCard label="Removal rate" value={formatPercent(saved.removal_rate_pct)} tone="navy" /><MetricCard label="New baseline" value={formatPercent(saved.new_comparison?.baseline_rate_pct)} tone="blue" /><MetricCard label="Group size" value={saved.new_comparison?.group_size} tone="green" /></div></Panel>}</section>
 }
 
-function Assistant({ analysis, selectedFinding, onError }) {
+function Assistant({ analysis, selectedFinding, onError, onOpenChat }) {
   const [findingId, setFindingId] = useState(selectedFinding?.finding_id || analysis?.findings?.[0]?.finding_id || '')
   const [question, setQuestion] = useState('why_flagged')
   const [language, setLanguage] = useState('simple')
@@ -275,7 +336,29 @@ function Assistant({ analysis, selectedFinding, onError }) {
     try { setAnswer(await explainQuestion({ analysis_id: analysis.analysis_id, finding_id: findingId, question_key: question, language })) } catch (error) { onError(error) }
   }
   if (!analysis) return <EmptyState title="Assistant needs an analysis" text="Upload data and select a finding first." />
-  return <section className="page-section"><PageIntro eyebrow="MULTILINGUAL ASSISTANT" title="Ask about an API-returned finding" text="Answers are deterministic templates from the backend. They do not identify people, attribute intent, or prove wrongdoing." /><Panel title="Question controls"><div className="form-grid"><label>Finding<select value={findingId} onChange={(event) => setFindingId(event.target.value)}>{analysis.findings?.map((finding) => <option key={finding.finding_id} value={finding.finding_id}>{finding.finding_id}</option>)}</select></label><label>Question<select value={question} onChange={(event) => setQuestion(event.target.value)}><option value="why_flagged">Why was this flagged?</option><option value="what_evidence">What evidence supports it?</option><option value="what_percentage">What does the percentage mean?</option><option value="what_verify">What should a reviewer verify?</option><option value="does_prove_wrongdoing">Does this prove wrongdoing?</option></select></label><label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="simple">Simple English</option><option value="technical">Technical</option><option value="hindi">Hindi</option></select></label></div><div className="example-question">Example limitation question: “Who committed fraud?” → This evidence cannot identify a person or establish wrongdoing.</div><button className="button primary" onClick={ask}><Languages size={17} /> Ask backend</button></Panel>{answer && <Panel title="Backend answer"><div className="answer-box"><span className="answer-label">{answer.language} · {answer.question_key}</span><p>{answer.answer}</p></div></Panel>}</section>
+  return (
+    <section className="page-section">
+      <div className="chat-promo-banner">
+        <div className="chat-promo-text">
+          <div className="promo-badge"><Sparkles size={14} /> Bilingual AI & Hybrid Engine</div>
+          <h3>Conversational Electoral Roll Assistant</h3>
+          <p>Get holistic roll summaries, ask comparative questions in English or Hindi, and inspect anomaly evidence interactively.</p>
+        </div>
+        <button className="button primary" onClick={onOpenChat}><MessageSquare size={16} /> Open Conversational Assistant</button>
+      </div>
+      <PageIntro eyebrow="MULTILINGUAL ASSISTANT" title="Ask about an API-returned finding" text="Answers are deterministic templates from the backend. They do not identify people, attribute intent, or prove wrongdoing." />
+      <Panel title="Question controls">
+        <div className="form-grid">
+          <label>Finding<select value={findingId} onChange={(event) => setFindingId(event.target.value)}>{analysis.findings?.map((finding) => <option key={finding.finding_id} value={finding.finding_id}>{finding.finding_id}</option>)}</select></label>
+          <label>Question<select value={question} onChange={(event) => setQuestion(event.target.value)}><option value="why_flagged">Why was this flagged?</option><option value="what_evidence">What evidence supports it?</option><option value="what_percentage">What does the percentage mean?</option><option value="what_verify">What should a reviewer verify?</option><option value="does_prove_wrongdoing">Does this prove wrongdoing?</option></select></label>
+          <label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="simple">Simple English</option><option value="technical">Technical</option><option value="hindi">Hindi</option></select></label>
+        </div>
+        <div className="example-question">Example limitation question: “Who committed fraud?” → This evidence cannot identify a person or establish wrongdoing.</div>
+        <button className="button primary" onClick={ask}><Languages size={17} /> Ask backend</button>
+      </Panel>
+      {answer && <Panel title="Backend answer"><div className="answer-box"><span className="answer-label">{answer.language} · {answer.question_key}</span><p>{answer.answer}</p></div></Panel>}
+    </section>
+  )
 }
 
 function Benchmark({ onError }) {
@@ -304,6 +387,388 @@ function ListBlock({ title, items }) { return <div className="list-block"><stron
 function NoticeText({ text }) { return <div className="passport-notice"><AlertTriangle size={15} />{text}</div> }
 function EmptyState({ title, text, action, onAction }) { return <div className="empty-state"><Database size={26} /><h2>{title}</h2><p>{text}</p>{action && <button className="button secondary" onClick={onAction}>{action}</button>}</div> }
 function valueOrUnavailable(value) { return value === undefined || value === null || value === '' ? 'Not available' : String(value) }
-function ConfirmDialog({ onCancel, onConfirm }) { return <div className="modal-backdrop"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title"><h2 id="reset-title">Reset client workspace?</h2><p>This clears selected files, findings, filters, and displayed analysis in this browser. It does not erase the backend's in-memory analysis store.</p><div className="action-row"><button className="button secondary" onClick={onCancel}>Cancel</button><button className="button danger" onClick={onConfirm}>Clear workspace</button></div></div></div> }
+function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSample, isAppLoading }) {
+  const [language, setLanguage] = useState('en')
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [conversationId, setConversationId] = useState(null)
+  const [loadedAnalysisKey, setLoadedAnalysisKey] = useState(null)
+  const messagesEndRef = useRef(null)
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, loading])
+
+  // Load deterministic summary when chat is open and analysis is present
+  const loadSummary = useCallback(async (analysisId, lang) => {
+    setLoading(true)
+    try {
+      const res = await chatExplain(analysisId, lang)
+      setLoadedAnalysisKey(`${analysisId}-${lang}`)
+      setMessages([
+        {
+          id: `summary-${Date.now()}`,
+          role: 'assistant',
+          text: res.summary,
+          disclaimer: res.disclaimer,
+          source: res.source,
+          suggestedQuestions: res.suggested_questions || [],
+          evidenceReferences: res.evidence_references || [],
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ])
+    } catch (err) {
+      setMessages([
+        {
+          id: `err-${Date.now()}`,
+          role: 'assistant',
+          text: `Unable to load analysis summary: ${err.message}`,
+          isError: true,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen && analysis?.analysis_id) {
+      const currentKey = `${analysis.analysis_id}-${language}`
+      if (loadedAnalysisKey !== currentKey) {
+        loadSummary(analysis.analysis_id, language)
+      }
+    }
+  }, [isOpen, analysis?.analysis_id, language, loadedAnalysisKey, loadSummary])
+
+  async function sendMessage(text) {
+    const q = (text || input).trim()
+    if (!q || !analysis?.analysis_id || loading) return
+
+    const userMessage = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      text: q,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }
+
+    setMessages((prev) => [...prev, userMessage])
+    setInput('')
+    setLoading(true)
+
+    try {
+      const res = await chatMessage(analysis.analysis_id, q, language, conversationId)
+      if (res.conversation_id) setConversationId(res.conversation_id)
+
+      const botMessage = {
+        id: `a-${Date.now()}`,
+        role: 'assistant',
+        text: res.answer,
+        disclaimer: res.disclaimer,
+        source: res.source,
+        suggestedQuestions: res.suggested_questions || [],
+        evidenceReferences: res.evidence_references || [],
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+      setMessages((prev) => [...prev, botMessage])
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-${Date.now()}`,
+          role: 'assistant',
+          text: `Chat request failed: ${err.message}`,
+          isError: true,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleReset() {
+    setConversationId(null)
+    if (analysis?.analysis_id) {
+      loadSummary(analysis.analysis_id, language)
+    } else {
+      setMessages([])
+    }
+  }
+
+  function toggleLanguage() {
+    const nextLang = language === 'en' ? 'hi' : 'en'
+    setLanguage(nextLang)
+    if (analysis?.analysis_id) {
+      loadSummary(analysis.analysis_id, nextLang)
+    }
+  }
+
+  return (
+    <>
+      <button
+        className={`chat-fab ${isOpen ? 'active' : ''}`}
+        onClick={onToggle}
+        aria-label={isOpen ? 'Close Insight Assistant' : 'Open Insight Assistant'}
+      >
+        {isOpen ? <X size={20} /> : (
+          <>
+            <Sparkles size={18} />
+            <span className="fab-label">Insight Assistant</span>
+            {analysis && <span className="fab-pulse" />}
+          </>
+        )}
+      </button>
+
+      {isOpen && (
+        <aside className="chat-window" aria-label="Insight Assistant Chat">
+          <header className="chat-header">
+            <div className="chat-header-info">
+              <div className="chat-title-row">
+                <Bot size={18} className="bot-icon" />
+                <strong>Insight Assistant</strong>
+                <span className="bilingual-badge">{language === 'hi' ? 'सहायक' : 'AI + Rules'}</span>
+              </div>
+              <div className="chat-subtitle">
+                {analysis?.analysis_id ? (
+                  <span className="active-id">Analysis: {analysis.analysis_id}</span>
+                ) : (
+                  <span>No active audit dataset</span>
+                )}
+              </div>
+            </div>
+
+            <div className="chat-header-actions">
+              <button
+                className="lang-toggle-btn"
+                onClick={toggleLanguage}
+                title={`Switch to ${language === 'en' ? 'Hindi' : 'English'}`}
+              >
+                <Globe size={14} />
+                <span>{language === 'en' ? 'HI / हिंदी' : 'EN / English'}</span>
+              </button>
+              {analysis && (
+                <button className="icon-btn-ghost" onClick={handleReset} title="Reset conversation">
+                  <RotateCcw size={15} />
+                </button>
+              )}
+              <button className="icon-btn-ghost" onClick={onToggle} title="Close chat">
+                <X size={17} />
+              </button>
+            </div>
+          </header>
+
+          <div className="chat-disclaimer-bar">
+            <AlertTriangle size={13} />
+            <span>Signals for review only · Does not declare fraud or identify individuals</span>
+          </div>
+
+          <div className="chat-body">
+            {!analysis ? (
+              <div className="chat-empty-state">
+                <Database size={32} />
+                <h4>No Electoral Roll Analyzed Yet</h4>
+                <p>Run a comparison between previous and current rolls to unlock conversational insights, area anomaly explanations, and bilingual audit guidance.</p>
+                <button className="button primary sm" disabled={isAppLoading} onClick={() => { onLoadSample(); }}>
+                  {isAppLoading ? <><RefreshCw className="spin" size={14} /> Loading Demo Datasets…</> : <><FolderOpen size={15} /> Load Demo Datasets</>}
+                </button>
+              </div>
+            ) : (
+              <>
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`chat-message-bubble ${msg.role}`}>
+                    <div className="msg-header">
+                      <span className="sender-name">
+                        {msg.role === 'assistant' ? (
+                          <>
+                            <Sparkles size={13} />
+                            {msg.source === 'ai_gemini' ? 'Gemini 2.0 Flash' : 'VoterLens Engine'}
+                          </>
+                        ) : (
+                          <>
+                            <User size={13} /> You
+                          </>
+                        )}
+                      </span>
+                      <span className="msg-time">{msg.timestamp}</span>
+                    </div>
+
+                    <div className="msg-content">
+                      <ChatFormattedText text={msg.text} />
+                    </div>
+
+                    {msg.isError && (
+                      <div style={{ marginTop: '8px' }}>
+                        <button
+                          className="mini-button"
+                          onClick={() => {
+                            setLoadedAnalysisKey(null)
+                            loadSummary(analysis.analysis_id, language)
+                          }}
+                        >
+                          <RotateCcw size={12} /> Retry Loading Summary
+                        </button>
+                      </div>
+                    )}
+
+                    {msg.evidenceReferences && msg.evidenceReferences.length > 0 && (
+                      <div className="evidence-chips">
+                        <span className="evidence-title">Related Evidence:</span>
+                        <div className="evidence-pills-row">
+                          {msg.evidenceReferences.map((ref, idx) => (
+                            <button
+                              key={`${ref.id}-${idx}`}
+                              className="evidence-pill"
+                              onClick={() => {
+                                if (ref.type === 'area') onNavigate('areas')
+                                else if (ref.type === 'finding') onNavigate('findings')
+                              }}
+                              title={`Jump to ${ref.type}`}
+                            >
+                              <span>{ref.label || ref.id}</span>
+                              <ExternalLink size={11} />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {msg.disclaimer && (
+                      <div className="msg-disclaimer">
+                        <small>{msg.disclaimer}</small>
+                      </div>
+                    )}
+
+                    {msg.suggestedQuestions && msg.suggestedQuestions.length > 0 && (
+                      <div className="suggested-chips-block">
+                        <span className="suggested-title">Suggested questions:</span>
+                        <div className="suggested-chips-list">
+                          {msg.suggestedQuestions.map((sq, i) => (
+                            <button
+                              key={i}
+                              className="suggested-chip"
+                              onClick={() => sendMessage(sq)}
+                              disabled={loading}
+                            >
+                              <CornerDownRight size={12} />
+                              <span>{sq}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {loading && (
+                  <div className="chat-message-bubble assistant loading">
+                    <div className="msg-header">
+                      <span className="sender-name"><Sparkles size={13} /> Analyzing roll...</span>
+                    </div>
+                    <div className="typing-dots">
+                      <span /><span /><span />
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </>
+            )}
+          </div>
+
+          {analysis && (
+            <footer className="chat-footer">
+              <form
+                className="chat-input-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  sendMessage()
+                }}
+              >
+                <div className="input-row">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value.slice(0, 500))}
+                    placeholder={
+                      language === 'hi'
+                        ? 'मतदाता सूची, विसंगतियों या क्षेत्रों के बारे में पूछें...'
+                        : 'Ask about findings, removal rates, data quality...'
+                    }
+                    disabled={loading}
+                  />
+                  <button
+                    type="submit"
+                    className="send-button"
+                    disabled={!input.trim() || loading}
+                    aria-label="Send message"
+                  >
+                    <Send size={16} />
+                  </button>
+                </div>
+                <div className="input-meta">
+                  <span>{input.length}/500 chars</span>
+                  <span className="privacy-tag">Never sends voter PII</span>
+                </div>
+              </form>
+            </footer>
+          )}
+        </aside>
+      )}
+    </>
+  )
+}
+
+function ChatFormattedText({ text }) {
+  if (!text) return null
+  const paragraphs = text.split('\n\n')
+
+  return (
+    <div className="formatted-chat-text">
+      {paragraphs.map((p, idx) => {
+        if (p.includes('\n- ') || p.includes('\n* ') || p.startsWith('- ') || p.startsWith('* ')) {
+          const lines = p.split('\n').filter(Boolean)
+          return (
+            <ul key={idx}>
+              {lines.map((line, lIdx) => (
+                <li key={lIdx}>
+                  <InlineBoldText text={line.replace(/^[-*]\s+/, '')} />
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        if (/^\d+\.\s+/.test(p)) {
+          const lines = p.split('\n').filter(Boolean)
+          return (
+            <ol key={idx}>
+              {lines.map((line, lIdx) => (
+                <li key={lIdx}>
+                  <InlineBoldText text={line.replace(/^\d+\.\s+/, '')} />
+                </li>
+              ))}
+            </ol>
+          )
+        }
+        return (
+          <p key={idx}>
+            <InlineBoldText text={p} />
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+function InlineBoldText({ text }) {
+  if (!text) return null
+  const parts = text.split(/(\*\*.*?\*\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>
+    }
+    return part
+  })
+}
 
 export default App

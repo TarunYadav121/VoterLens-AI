@@ -302,3 +302,14 @@ GENERATOR_POPULATION_GROUPS = {
     "D01": "group-2",
     "E01": "group-3",
 }
+
+# ---------------------------------------------------------------------------
+# AI Insight Assistant configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_AI_PROVIDER = "gemini"
+DEFAULT_AI_MODEL = "gemini-2.0-flash"
+DEFAULT_AI_MAX_TOKENS = 1024
+DEFAULT_AI_TIMEOUT_SECONDS = 30
+MAX_QUESTION_LENGTH = 500
+SUPPORTED_LANGUAGES = {"en", "hi"}

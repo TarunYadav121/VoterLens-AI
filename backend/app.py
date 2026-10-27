@@ -15,6 +15,8 @@ Endpoints:
   - POST /api/challenge/run
   - GET  /api/record/<analysis_id>/<record_id>
   - POST /api/explain-qa
+  - POST /api/chat/explain
+  - POST /api/chat/message
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from models import (
     RecheckResponse,
     StoredAnalysis,
 )
+import insight_assistant
 import reporter
 import validator
 
@@ -100,6 +103,7 @@ def create_app(testing: bool = False) -> Flask:
 
     # In-memory store with LRU eviction
     analysis_store: OrderedDict[str, StoredAnalysis] = OrderedDict()
+    app.analysis_store = analysis_store
 
     # Ensure sample datasets exist
     _ensure_sample_datasets()
@@ -925,6 +929,97 @@ def create_app(testing: bool = False) -> Flask:
             disclaimer="These results reflect synthetic scenarios defined for this challenge. They do not measure real-world electoral fraud detection performance.",
         )
         return jsonify(resp.model_dump()), 200
+
+    # -----------------------------------------------------------------------
+    # Insight Assistant — Deterministic Summary
+    # -----------------------------------------------------------------------
+
+    @app.post("/api/chat/explain")
+    def chat_explain():
+        data = request.get_json(silent=True) or {}
+        analysis_id = data.get("analysis_id")
+        language = data.get("language", "en")
+
+        if not analysis_id:
+            return jsonify({
+                "status": "error",
+                "code": "BAD_REQUEST",
+                "message": "analysis_id is required.",
+            }), 400
+
+        if language not in insight_assistant.SUPPORTED_LANGUAGES:
+            return jsonify({
+                "status": "error",
+                "code": "UNSUPPORTED_LANGUAGE",
+                "message": f"Language '{language}' is not supported. Supported: {sorted(insight_assistant.SUPPORTED_LANGUAGES)}",
+            }), 400
+
+        stored = analysis_store.get(analysis_id)
+        if not stored:
+            return jsonify({
+                "status": "error",
+                "code": "ANALYSIS_NOT_FOUND",
+                "message": f"Analysis {analysis_id} not found.",
+            }), 404
+
+        result = insight_assistant.generate_summary(stored, language)
+        return jsonify({"status": "success", **result}), 200
+
+    # -----------------------------------------------------------------------
+    # Insight Assistant — Conversational Message
+    # -----------------------------------------------------------------------
+
+    @app.post("/api/chat/message")
+    def chat_message():
+        data = request.get_json(silent=True) or {}
+        analysis_id = data.get("analysis_id")
+        message = data.get("message", "").strip()
+        language = data.get("language", "en")
+        conversation_id = data.get("conversation_id")
+
+        if not analysis_id:
+            return jsonify({
+                "status": "error",
+                "code": "BAD_REQUEST",
+                "message": "analysis_id is required.",
+            }), 400
+
+        if language not in insight_assistant.SUPPORTED_LANGUAGES:
+            return jsonify({
+                "status": "error",
+                "code": "UNSUPPORTED_LANGUAGE",
+                "message": f"Language '{language}' is not supported. Supported: {sorted(insight_assistant.SUPPORTED_LANGUAGES)}",
+            }), 400
+
+        if not message:
+            return jsonify({
+                "status": "error",
+                "code": "EMPTY_QUESTION",
+                "message": "message field cannot be empty.",
+            }), 400
+
+        if len(message) > insight_assistant.MAX_QUESTION_LENGTH:
+            return jsonify({
+                "status": "error",
+                "code": "QUESTION_TOO_LONG",
+                "message": f"Question exceeds maximum length of {insight_assistant.MAX_QUESTION_LENGTH} characters.",
+            }), 400
+
+        stored = analysis_store.get(analysis_id)
+        if not stored:
+            return jsonify({
+                "status": "error",
+                "code": "ANALYSIS_NOT_FOUND",
+                "message": f"Analysis {analysis_id} not found.",
+            }), 404
+
+        result = insight_assistant.handle_chat_message(
+            stored=stored,
+            message=message,
+            language=language,
+            conversation_id=conversation_id,
+        )
+        return jsonify({"status": "success", **result}), 200
 
     return app
 

@@ -85,4 +85,27 @@ export async function downloadExport(analysisId, reportType) {
   return { blob: new Blob([payload], { type: 'text/csv' }), filename }
 }
 
+export async function chatExplain(analysisId, language = 'en') {
+  const { payload } = await request('/api/chat/explain', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ analysis_id: analysisId, language }),
+  })
+  return payload
+}
+
+export async function chatMessage(analysisId, message, language = 'en', conversationId = null) {
+  const { payload } = await request('/api/chat/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      analysis_id: analysisId,
+      message,
+      language,
+      conversation_id: conversationId,
+    }),
+  })
+  return payload
+}
+
 export { API_BASE_URL }
