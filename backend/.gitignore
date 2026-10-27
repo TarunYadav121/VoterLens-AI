@@ -1,0 +1,50 @@
+# Python virtual environment
+
+venv/
+.venv/
+env/
+
+# Python cache files
+
+**pycache**/
+*.py[cod]
+*$py.class
+
+# Environment variables and secrets
+
+.env
+.env.*
+!.env.example
+
+# Testing and coverage
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+
+*.log
+
+# IDE and editor files
+
+.vscode/
+.idea/
+
+# Operating system files
+
+.DS_Store
+Thumbs.db
+
+# Temporary files
+
+*.tmp
+*.bak
+
+# Uploaded files and generated reports
+
+uploads/*
+!uploads/.gitkeep
+
+reports/*
+!reports/.gitkeep
