@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import io
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -86,8 +87,16 @@ def create_app(testing: bool = False) -> Flask:
     app.config["TESTING"] = testing
     app.config["MAX_CONTENT_LENGTH"] = cfg.MAX_FILE_SIZE_BYTES
 
-    # CORS configuration
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    # CORS configuration: restrict to configured origins or localhost/frontend by default
+    raw_origins = os.environ.get(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+    )
+    if os.environ.get("CORS_ALLOW_ALL", "0") == "1" or raw_origins.strip() == "*":
+        cors_origins = "*"
+    else:
+        cors_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}})
 
     # In-memory store with LRU eviction
     analysis_store: OrderedDict[str, StoredAnalysis] = OrderedDict()
@@ -383,12 +392,23 @@ def create_app(testing: bool = False) -> Flask:
                 "message": "Both analysis_id and area_id are required.",
             }), 400
 
-        if threshold_override is not None and float(threshold_override) <= 0:
-            return jsonify({
-                "status": "error",
-                "code": "INVALID_THRESHOLD",
-                "message": "threshold_override must be a positive number.",
-            }), 400
+        parsed_threshold: float | None = None
+        if threshold_override is not None:
+            try:
+                parsed_threshold = float(threshold_override)
+            except (ValueError, TypeError):
+                return jsonify({
+                    "status": "error",
+                    "code": "INVALID_THRESHOLD",
+                    "message": "threshold_override must be a valid number.",
+                }), 400
+
+            if parsed_threshold <= 0:
+                return jsonify({
+                    "status": "error",
+                    "code": "INVALID_THRESHOLD",
+                    "message": "threshold_override must be a positive number.",
+                }), 400
 
         stored = analysis_store.get(analysis_id)
         if not stored:
@@ -402,7 +422,7 @@ def create_app(testing: bool = False) -> Flask:
             area_stats=stored.comparison_result.area_stats,
             target_area_id=area_id,
             comparison_method=comparison_method,
-            threshold_override=float(threshold_override) if threshold_override is not None else None,
+            threshold_override=parsed_threshold,
             filters=filters,
         )
 
@@ -463,11 +483,25 @@ def create_app(testing: bool = False) -> Flask:
                 and recheck_finding_match.review_priority == original.review_priority
             )
 
+        curr_config = {
+            "COMPARISON_FIELDS": cfg.COMPARISON_FIELDS,
+            "THRESHOLD_REMOVAL_RATE": cfg.THRESHOLD_REMOVAL_RATE,
+            "THRESHOLD_ADDITION_RATE": cfg.THRESHOLD_ADDITION_RATE,
+            "MIN_COMPARISON_GROUP_SIZE": cfg.MIN_COMPARISON_GROUP_SIZE,
+            "AGE_MIN_PLAUSIBLE": cfg.AGE_MIN_PLAUSIBLE,
+            "AGE_MAX_PLAUSIBLE": cfg.AGE_MAX_PLAUSIBLE,
+            "MAX_ROW_COUNT": cfg.MAX_ROW_COUNT,
+        }
+        config_changed = bool(stored.config_snapshot and stored.config_snapshot != curr_config)
+        dataset_changed = False
+
         resp = RecheckResponse(
             status="success",
             original_finding=original,
             recheck_finding=recheck_finding_match,
             match=match,
+            dataset_changed=dataset_changed,
+            config_changed=config_changed,
             recheck_timestamp=datetime.now(timezone.utc).isoformat(),
         )
         return jsonify(resp.model_dump()), 200
@@ -898,4 +932,7 @@ def create_app(testing: bool = False) -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5000"))
+    debug = os.environ.get("FLASK_DEBUG", "0").lower() in ("1", "true", "yes")
+    app.run(host=host, port=port, debug=debug)

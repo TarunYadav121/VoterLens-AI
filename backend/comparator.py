@@ -35,19 +35,23 @@ from models import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+import re
+
+
+def _canonicalize_str(val: Any) -> str:
+    """Normalize internal whitespace and case-fold for robust semantic equality."""
+    return re.sub(r"\s+", " ", str(val).strip()).lower()
+
 
 def _nan_equal(a: Any, b: Any) -> bool:
-    """Return True if both values are equal, treating NaN == NaN as equal."""
+    """Return True if both values are equal, treating NaN == NaN as equal and normalizing case/whitespace."""
     a_na = pd.isna(a) if not isinstance(a, (list, dict)) else False
     b_na = pd.isna(b) if not isinstance(b, (list, dict)) else False
     if a_na and b_na:
         return True
     if a_na or b_na:
         return False
-    return str(a).strip() == str(b).strip()
+    return _canonicalize_str(a) == _canonicalize_str(b)
 
 
 def _compute_field_diffs(

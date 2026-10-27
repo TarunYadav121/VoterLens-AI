@@ -133,3 +133,11 @@ def test_tv15_invalid_gender_value():
     csv_bytes = b"record_id,name,area_id,area_name,gender\nSYN-001,Arjun,A01,North Valley,X\n"
     result = validator.validate_csv(csv_bytes, "previous_file")
     assert any(rf.type == "INVALID_GENDER" for rf in result.review_flags)
+
+
+def test_tv16_unknown_column_warning():
+    """TV-16: Unknown extra column -> WARNING: unknown column."""
+    csv_bytes = b"record_id,name,area_id,area_name,extra_col\nSYN-001,Arjun,A01,North Valley,random\n"
+    result = validator.validate_csv(csv_bytes, "previous_file")
+    assert not result.has_blocking_errors
+    assert any(w.type == "UNKNOWN_COLUMN" and w.column == "extra_col" for w in result.warnings)

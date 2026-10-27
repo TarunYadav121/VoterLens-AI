@@ -183,3 +183,72 @@ def test_ta11_explain_qa(flask_client, valid_previous_csv_bytes, valid_current_c
         })
         assert qa_resp.status_code == 200
         assert "answer" in qa_resp.get_json()
+
+
+def test_ta12_compare_areas_invalid_threshold(flask_client, valid_previous_csv_bytes, valid_current_csv_bytes):
+    """TA-12: POST /api/compare-areas with non-numeric threshold -> 400 INVALID_THRESHOLD."""
+    data = {
+        "previous_file": (io.BytesIO(valid_previous_csv_bytes), "previous_roll.csv"),
+        "current_file": (io.BytesIO(valid_current_csv_bytes), "current_roll.csv"),
+    }
+    analyze_resp = flask_client.post("/api/analyze", data=data)
+    analysis_id = analyze_resp.get_json()["analysis_id"]
+
+    resp = flask_client.post("/api/compare-areas", json={
+        "analysis_id": analysis_id,
+        "area_id": "A01",
+        "threshold_override": "not-a-number",
+    })
+    assert resp.status_code == 400
+    res_data = resp.get_json()
+    assert res_data["code"] == "INVALID_THRESHOLD"
+
+
+def test_ta13_recheck_includes_change_flags(flask_client, valid_previous_csv_bytes, valid_current_csv_bytes):
+    """TA-13: POST /api/recheck-finding returns dataset_changed and config_changed flags."""
+    data = {
+        "previous_file": (io.BytesIO(valid_previous_csv_bytes), "previous_roll.csv"),
+        "current_file": (io.BytesIO(valid_current_csv_bytes), "current_roll.csv"),
+    }
+    analyze_resp = flask_client.post("/api/analyze", data=data)
+    res_data = analyze_resp.get_json()
+    analysis_id = res_data["analysis_id"]
+
+    # Trigger recheck (or test with dummy finding id for contract check)
+    if res_data["findings"]:
+        finding_id = res_data["findings"][0]["finding_id"]
+        resp = flask_client.post("/api/recheck-finding", json={
+            "analysis_id": analysis_id,
+            "finding_id": finding_id,
+        })
+        assert resp.status_code == 200
+        recheck_data = resp.get_json()
+        assert "dataset_changed" in recheck_data
+        assert "config_changed" in recheck_data
+        assert isinstance(recheck_data["dataset_changed"], bool)
+        assert isinstance(recheck_data["config_changed"], bool)
+
+
+def test_ta14_unsupported_qa_question_refusal(flask_client, valid_previous_csv_bytes, valid_current_csv_bytes):
+    """TA-14: POST /api/explain-qa with unsupported question returns evidence-grounded refusal."""
+    data = {
+        "previous_file": (io.BytesIO(valid_previous_csv_bytes), "previous_roll.csv"),
+        "current_file": (io.BytesIO(valid_current_csv_bytes), "current_roll.csv"),
+    }
+    analyze_resp = flask_client.post("/api/analyze", data=data)
+    res_data = analyze_resp.get_json()
+    analysis_id = res_data["analysis_id"]
+
+    if res_data["findings"]:
+        finding_id = res_data["findings"][0]["finding_id"]
+        resp = flask_client.post("/api/explain-qa", json={
+            "analysis_id": analysis_id,
+            "finding_id": finding_id,
+            "question_key": "who_committed_fraud",
+            "language": "simple",
+        })
+        assert resp.status_code == 200
+        answer = resp.get_json()["answer"]
+        assert "cannot answer that from this evidence" in answer.lower()
+        assert "prove wrongdoing" in answer.lower()
+

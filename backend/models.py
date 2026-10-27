@@ -309,6 +309,8 @@ class RecheckResponse(BaseModel):
     recheck_finding: Optional[Finding]
     match: Optional[bool]
     recheck_timestamp: str
+    dataset_changed: bool = False
+    config_changed: bool = False
     message: Optional[str] = None
 
 

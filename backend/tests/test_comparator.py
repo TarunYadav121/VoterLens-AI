@@ -153,3 +153,16 @@ def test_tc12_nan_vs_real_value_counted_as_diff():
     res = comparator.compare(df1, df2)
     assert res.summary.modified == 1
     assert res.modified[0].changed_fields == ["age"]
+
+
+def test_tc13_formatting_only_differences_are_unchanged():
+    """TC-13: Formatting-only case/whitespace differences -> Classified as UNCHANGED."""
+    df1 = pd.DataFrame([
+        {"record_id": "SYN-001", "name": "Alice Smith", "area_id": "A01", "area_name": "North"}
+    ])
+    df2 = pd.DataFrame([
+        {"record_id": "SYN-001", "name": "  alice   smith  ", "area_id": "A01", "area_name": "North"}
+    ])
+    res = comparator.compare(df1, df2)
+    assert res.summary.modified == 0
+    assert res.summary.unchanged == 1

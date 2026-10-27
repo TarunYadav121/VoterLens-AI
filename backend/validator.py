@@ -184,6 +184,18 @@ def validate_csv(
             ))
 
     # ------------------------------------------------------------------
+    # Column-level: unknown/extra columns (warnings only)
+    # ------------------------------------------------------------------
+    recognized_columns = set(cfg.ALL_SCHEMA_COLUMNS)
+    unknown_columns = actual_columns - recognized_columns
+    for col in sorted(unknown_columns):
+        warnings.append(_issue(
+            "WARNING", "UNKNOWN_COLUMN", "RULE-V-014",
+            f"Column '{col}' is not part of the recognized schema. It will be ignored during analysis.",
+            column=col,
+        ))
+
+    # ------------------------------------------------------------------
     # Row-level: record_id checks
     # ------------------------------------------------------------------
     # Identify null record_ids
@@ -353,10 +365,17 @@ def validate_csv(
                     value=val_str,
                 ))
 
-    # ------------------------------------------------------------------
-    # Build result
-    # ------------------------------------------------------------------
-    has_blocking = any(e.severity == "ERROR" for e in errors)
+    # Only structural/file-level errors block the analysis entirely.
+    # Row-level errors (e.g. duplicate IDs, invalid age types) are captured in errors/ambiguous
+    # rows, allowing comparator and detector to audit them rather than crashing the pipeline.
+    blocking_error_types = {
+        "FILE_TOO_LARGE",
+        "UNSUPPORTED_EXTENSION",
+        "UNREADABLE_CSV",
+        "EMPTY_FILE",
+        "MISSING_REQUIRED_COLUMN",
+    }
+    has_blocking = any(e.type in blocking_error_types for e in errors)
 
     # Deduplicate ambiguous_row_indices
     ambiguous_row_indices = sorted(set(ambiguous_row_indices))

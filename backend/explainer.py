@@ -307,43 +307,51 @@ def get_explanation_for_question(
     responses: dict[str, dict[str, str]] = {
         "why_flagged": {
             "technical": (
-                f"Rule {finding.rule_id} was triggered because the computed rate "
+                f"Rule {finding.rule_id} ({finding.title}) was triggered because the computed rate "
                 f"({ev.get('area_removal_rate_pct') or ev.get('area_addition_rate_pct', 'N/A')}%) "
-                f"exceeded the comparison baseline by more than the configured threshold."
+                f"exceeded the comparison baseline by more than the configured threshold. "
+                f"Review next step: {finding.recommended_next_step or 'Verify source registration records.'}"
             ),
             "simple": (
-                f"This area was flagged because the change rate was much higher "
-                f"than other areas, which is unusual enough to warrant a closer look."
+                f"Rule {finding.rule_id} flagged this area because the rate of change "
+                f"({ev.get('area_removal_rate_pct') or ev.get('area_addition_rate_pct', 'N/A')}%) was unusually high "
+                f"compared to other areas. This is a statistical signal for human audit, not proof of wrongdoing. "
+                f"Recommended step: {finding.recommended_next_step or 'Check the source registration records.'}"
             ),
             "hindi": (
-                "इस क्षेत्र को इसलिए चिह्नित किया गया क्योंकि परिवर्तन दर "
-                "अन्य क्षेत्रों की तुलना में बहुत अधिक थी।"
+                f"नियम {finding.rule_id} ने इस क्षेत्र को इसलिए चिह्नित किया क्योंकि परिवर्तन दर "
+                f"({ev.get('area_removal_rate_pct') or ev.get('area_addition_rate_pct', 'N/A')}%) "
+                f"अन्य क्षेत्रों की तुलना में बहुत अधिक थी। यह किसी गलत काम का प्रमाण नहीं है, "
+                f"बल्कि मानवीय समीक्षा के लिए एक संकेत है। अनुशंसित कदम: मूल दस्तावेजों की जाँच करें।"
             ),
         },
         "what_evidence": {
             "technical": (
-                f"Supporting evidence: {ev}"
+                f"Rule {finding.rule_id} supporting evidence: {ev}. Affected records: {finding.affected_record_count}."
             ),
             "simple": (
-                f"The evidence is: {ev.get('area_deleted_count') or ev.get('area_added_count', 'N/A')} "
-                f"records were changed out of {ev.get('area_previous_count') or ev.get('area_current_count', 'N/A')} total."
+                f"Rule {finding.rule_id} evidence: {ev.get('area_deleted_count') or ev.get('area_added_count', finding.affected_record_count)} "
+                f"records changed out of {ev.get('area_previous_count') or ev.get('area_current_count', 'N/A')} total in this area."
             ),
             "hindi": (
-                "साक्ष्य: यह संख्या विश्लेषण इंजन द्वारा CSV फ़ाइलों से गणना की गई है।"
+                f"नियम {finding.rule_id} साक्ष्य: इस क्षेत्र में कुल {ev.get('area_previous_count') or ev.get('area_current_count', 'N/A')} "
+                f"में से {ev.get('area_deleted_count') or ev.get('area_added_count', finding.affected_record_count)} रिकॉर्ड बदले।"
             ),
         },
         "what_percentage": {
             "technical": (
-                "The percentage represents the proportion of records that changed "
-                "relative to the total number of records in that area in the relevant version."
+                f"Rule {finding.rule_id}: The percentage represents the proportion of records that changed "
+                f"relative to the total records in this area ({ev.get('area_removal_rate_pct') or ev.get('area_addition_rate_pct', 'N/A')}%). "
+                "This serves as an objective metric against the comparison baseline."
             ),
             "simple": (
-                "The percentage tells you how many records changed out of all records "
-                "in that area. For example, 38% means about 38 out of every 100 records changed."
+                f"Rule {finding.rule_id}: The percentage ({ev.get('area_removal_rate_pct') or ev.get('area_addition_rate_pct', 'N/A')}%) "
+                "tells you how many records changed out of all records in this area. "
+                "This statistical comparison helps reviewers prioritize verification."
             ),
             "hindi": (
-                "प्रतिशत यह बताता है कि उस क्षेत्र में कितने रिकॉर्ड बदले, "
-                "कुल रिकॉर्ड के अनुपात में।"
+                f"नियम {finding.rule_id}: प्रतिशत ({ev.get('area_removal_rate_pct') or ev.get('area_addition_rate_pct', 'N/A')}%) "
+                "यह दर्शाता है कि उस क्षेत्र में कुल रिकॉर्ड के अनुपात में कितने रिकॉर्ड बदले।"
             ),
         },
         "what_verify": {
@@ -366,8 +374,24 @@ def get_explanation_for_question(
         },
     }
 
-    return responses.get(question_key, {}).get(
-        lang, "Question not recognised. Please select from: " + ", ".join(responses.keys())
+    if question_key not in responses:
+        refusals = {
+            "technical": (
+                "I cannot answer that from this evidence. The statistical analysis engine evaluates "
+                "aggregate data patterns and data-quality rules; it does not identify individuals, attribute intent, "
+                "or prove wrongdoing."
+            ),
+            "simple": (
+                "I cannot answer that from this evidence; the analysis does not identify a person or prove wrongdoing."
+            ),
+            "hindi": (
+                "मैं इस साक्ष्य से इसका उत्तर नहीं दे सकता; यह विश्लेषण किसी व्यक्ति की पहचान नहीं करता है और न ही किसी गलत काम को साबित करता है।"
+            ),
+        }
+        return refusals.get(lang, refusals["simple"])
+
+    return responses[question_key].get(
+        lang, responses[question_key].get("simple", "")
     )
 
 
