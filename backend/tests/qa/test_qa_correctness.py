@@ -224,9 +224,10 @@ def test_non_numeric_threshold_is_structured_error(flask_client):
 def test_duplicate_ids_are_ambiguous_warnings_not_matches(flask_client):
     previous = [row("DUP"), row("DUP", name="Second")]
     response = upload(flask_client, previous, [row("DUP")])
-    assert response.status_code == 400
+    assert response.status_code == 200
     assert response.is_json
-    assert any(
-        issue["type"] == "DUPLICATE_RECORD_ID"
-        for issue in response.get_json()["details"]["errors"]
-    )
+    payload = response.get_json()
+    assert payload["summary"]["ambiguous_previous"] == 2
+    assert payload["summary"]["modified"] == 0
+    assert payload["summary"]["added"] == 1
+    assert any(f["rule_id"] == "RULE-D-001" for f in payload["findings"])

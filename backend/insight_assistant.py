@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-AI_PROVIDER = os.environ.get("AI_PROVIDER", getattr(cfg, "DEFAULT_AI_PROVIDER", "gemini"))
+AI_PROVIDER = os.environ.get("AI_PROVIDER", getattr(cfg, "DEFAULT_AI_PROVIDER", "none")).lower()
 AI_MODEL = os.environ.get("AI_MODEL", getattr(cfg, "DEFAULT_AI_MODEL", "gemini-2.0-flash"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 AI_MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", str(getattr(cfg, "DEFAULT_AI_MAX_TOKENS", 1024))))
@@ -403,11 +403,26 @@ def _call_gemini(prompt: str) -> Optional[str]:
     return None
 
 
+def _is_unsupported_external_answer(answer: str, message: str) -> bool:
+    """Reject external answers that assert blame or unsupported wrongdoing."""
+    answer_lower = answer.lower()
+    question_lower = message.lower()
+    accusation_terms = (
+        "committed fraud", "commit fraud", "stole the election", "rigged",
+        "criminal", "guilty", " винов", "धांधली की", "दोषी",
+    )
+    asks_for_blame = any(term in question_lower for term in (
+        "who committed", "who is responsible", "who did it", "किसने", "कौन दोषी",
+    ))
+    return asks_for_blame or any(term in answer_lower for term in accusation_terms)
+
+
 def handle_chat_message(
     stored: StoredAnalysis,
     message: str,
     language: str = "en",
     conversation_id: Optional[str] = None,
+    allow_external_ai: bool = False,
 ) -> dict[str, Any]:
     """
     Handle a user question about the active analysis with hybrid AI + fallback.
@@ -427,7 +442,7 @@ def handle_chat_message(
     ai_used = False
     answer_text = None
 
-    if AI_PROVIDER == "gemini" and GEMINI_API_KEY:
+    if allow_external_ai and AI_PROVIDER == "gemini" and GEMINI_API_KEY:
         facts_json = str(facts)
         system_rules = (
             "You are the VoterLens AI Insight Assistant, an electoral roll transparency expert. "
@@ -439,7 +454,7 @@ def handle_chat_message(
             f"USER QUESTION: {clean_message}"
         )
         ai_resp = _call_gemini(system_rules)
-        if ai_resp:
+        if ai_resp and not _is_unsupported_external_answer(ai_resp, clean_message):
             answer_text = ai_resp
             ai_used = True
 

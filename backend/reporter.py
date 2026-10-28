@@ -26,6 +26,17 @@ from typing import Any
 from models import StoredAnalysis
 
 
+def _safe_csv_cell(value: Any) -> Any:
+    """Prevent spreadsheet formula execution for user-controlled text."""
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
+
+def _safe_csv_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: _safe_csv_cell(value) for key, value in row.items()}
+
+
 def export_summary_csv(stored: StoredAnalysis) -> str:
     """Generate summary CSV (one data row)."""
     output = io.StringIO()
@@ -81,7 +92,7 @@ def export_added_csv(stored: StoredAnalysis) -> str:
         row = dict(r.data)
         row["record_id"] = r.record_id
         row["change_category"] = r.change_category
-        writer.writerow(row)
+        writer.writerow(_safe_csv_row(row))
     return output.getvalue()
 
 
@@ -103,7 +114,7 @@ def export_deleted_csv(stored: StoredAnalysis) -> str:
         row = dict(r.data)
         row["record_id"] = r.record_id
         row["change_category"] = r.change_category
-        writer.writerow(row)
+        writer.writerow(_safe_csv_row(row))
     return output.getvalue()
 
 
@@ -141,14 +152,14 @@ def export_modified_csv(stored: StoredAnalysis) -> str:
             f"{d.field}: {d.previous_value or 'null'} -> {d.current_value or 'null'}"
             for d in r.diffs
         )
-        writer.writerow([
+        writer.writerow([_safe_csv_cell(value) for value in [
             r.record_id,
             r.change_category,
             ", ".join(r.changed_fields),
             diff_str,
             _json_dumps(r.previous_values),
             _json_dumps(r.current_values),
-        ])
+        ]])
     return output.getvalue()
 
 
@@ -177,7 +188,7 @@ def export_findings_csv(stored: StoredAnalysis) -> str:
     writer.writerow(headers)
 
     for f in findings:
-        writer.writerow([
+        writer.writerow([_safe_csv_cell(value) for value in [
             f.finding_id,
             f.rule_id,
             f.category,
@@ -193,7 +204,7 @@ def export_findings_csv(stored: StoredAnalysis) -> str:
             f.description,
             f.recommended_next_step,
             f.detected_at,
-        ])
+        ]])
     return output.getvalue()
 
 
@@ -229,7 +240,7 @@ def export_area_comparison_csv(stored: StoredAnalysis) -> str:
     writer.writerow(headers)
 
     for s in stats:
-        writer.writerow([
+        writer.writerow([_safe_csv_cell(value) for value in [
             s.area_id,
             s.area_name,
             s.area_type or "",
@@ -252,7 +263,7 @@ def export_area_comparison_csv(stored: StoredAnalysis) -> str:
             s.flagged_removal,
             s.flagged_addition,
             "; ".join(s.finding_ids),
-        ])
+        ]])
     return output.getvalue()
 
 

@@ -94,7 +94,7 @@ export async function chatExplain(analysisId, language = 'en') {
   return payload
 }
 
-export async function chatMessage(analysisId, message, language = 'en', conversationId = null) {
+export async function chatMessage(analysisId, message, language = 'en', conversationId = null, allowExternalAi = false) {
   const { payload } = await request('/api/chat/message', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -103,6 +103,7 @@ export async function chatMessage(analysisId, message, language = 'en', conversa
       message,
       language,
       conversation_id: conversationId,
+      allow_external_ai: allowExternalAi,
     }),
   })
   return payload

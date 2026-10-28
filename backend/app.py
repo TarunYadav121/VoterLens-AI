@@ -103,6 +103,8 @@ def create_app(testing: bool = False) -> Flask:
 
     # In-memory store with LRU eviction
     analysis_store: OrderedDict[str, StoredAnalysis] = OrderedDict()
+    analysis_store_sizes: dict[str, int] = {}
+    retained_upload_bytes = 0
     app.analysis_store = analysis_store
 
     # Ensure sample datasets exist
@@ -227,6 +229,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/api/analyze")
     def analyze():
+        nonlocal retained_upload_bytes
         if "previous_file" not in request.files or "current_file" not in request.files:
             return jsonify({
                 "status": "error",
@@ -329,9 +332,22 @@ def create_app(testing: bool = False) -> Flask:
             analysis_id,
         )
 
-        # Step 7: Store in LRU in-memory store
-        if len(analysis_store) >= cfg.MAX_STORED_ANALYSES:
-            analysis_store.popitem(last=False)  # pop oldest
+        # Step 7: Store in LRU in-memory store. The byte limit estimates retained
+        # input size; parsed data and model overhead can be larger.
+        estimated_size = len(prev_bytes) + len(curr_bytes)
+        if estimated_size > cfg.MAX_STORED_UPLOAD_BYTES:
+            return jsonify({
+                "status": "error",
+                "code": "ANALYSIS_TOO_LARGE",
+                "message": "The analysis input exceeds the configured retained-analysis limit.",
+                "details": {"estimated_upload_bytes": estimated_size},
+            }), 413
+        while analysis_store and (
+            len(analysis_store) >= cfg.MAX_STORED_ANALYSES
+            or retained_upload_bytes + estimated_size > cfg.MAX_STORED_UPLOAD_BYTES
+        ):
+            evicted_id, _ = analysis_store.popitem(last=False)
+            retained_upload_bytes -= analysis_store_sizes.pop(evicted_id, 0)
 
         analyzed_at = datetime.now(timezone.utc).isoformat()
         stored = StoredAnalysis(
@@ -352,6 +368,8 @@ def create_app(testing: bool = False) -> Flask:
             },
         )
         analysis_store[analysis_id] = stored
+        analysis_store_sizes[analysis_id] = estimated_size
+        retained_upload_bytes += estimated_size
 
         # Step 8: Build response
         changes_block = comparator.build_changes_block(comp_result)
@@ -976,6 +994,7 @@ def create_app(testing: bool = False) -> Flask:
         message = data.get("message", "").strip()
         language = data.get("language", "en")
         conversation_id = data.get("conversation_id")
+        allow_external_ai = data.get("allow_external_ai", False)
 
         if not analysis_id:
             return jsonify({
@@ -1004,6 +1023,12 @@ def create_app(testing: bool = False) -> Flask:
                 "code": "QUESTION_TOO_LONG",
                 "message": f"Question exceeds maximum length of {insight_assistant.MAX_QUESTION_LENGTH} characters.",
             }), 400
+        if not isinstance(allow_external_ai, bool):
+            return jsonify({
+                "status": "error",
+                "code": "INVALID_EXTERNAL_AI_OPT_IN",
+                "message": "allow_external_ai must be a boolean.",
+            }), 400
 
         stored = analysis_store.get(analysis_id)
         if not stored:
@@ -1018,6 +1043,7 @@ def create_app(testing: bool = False) -> Flask:
             message=message,
             language=language,
             conversation_id=conversation_id,
+            allow_external_ai=allow_external_ai,
         )
         return jsonify({"status": "success", **result}), 200
 

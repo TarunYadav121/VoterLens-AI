@@ -65,6 +65,11 @@ python app.py
 ```
 The API starts locally at `http://localhost:5000`.
 
+For deployment, use a production WSGI server such as Gunicorn, bind only to
+the required interface, set `FLASK_DEBUG=0`, configure explicit
+`ALLOWED_ORIGINS`, and keep `CORS_ALLOW_ALL=0`. The default host is
+`127.0.0.1`; `HOST`, `PORT`, and `FLASK_DEBUG` are environment-configurable.
+
 ### 4. Run the Test Suite
 
 ```bash
@@ -88,6 +93,28 @@ pytest tests/ -v --tb=short
 | `POST` | `/api/challenge/run` | Execute the 10-scenario False-Alarm Challenge with accuracy metrics |
 | `GET` | `/api/record/<analysis_id>/<record_id>` | Single record change inspector with field-level diffs |
 | `POST` | `/api/explain-qa` | Multilingual Q&A assistant (`simple`, `technical`, `hindi`) |
+| `POST` | `/api/chat/explain` | Deterministic bilingual analysis summary |
+| `POST` | `/api/chat/message` | Evidence-grounded chat; external AI requires `allow_external_ai: true` |
+
+## Prototype limits and privacy
+
+This project is a synthetic-data demonstration. Do not upload real voter
+information. Each uploaded CSV is limited to 20 MiB and 100,000 rows. The
+backend retains at most 10 analyses and an estimated 100 MiB of uploaded input
+bytes in an in-memory LRU; parsed objects can use more memory, and all analyses
+are lost on restart. This is not a durable or multi-user authorization layer.
+
+Record-level `added` and `deleted` exports may contain names, ages, gender, and
+other uploaded columns. They are suitable only for a controlled local demo.
+Authentication, authorization, retention controls, and redaction are required
+before public deployment or use with personal data. CSV output prefixes
+spreadsheet-formula-like leading characters to reduce formula-injection risk.
+
+The assistant uses deterministic responses by default (`AI_PROVIDER=none`).
+Gemini is optional, backend-only, and requires both backend credentials and an
+explicit per-request `allow_external_ai` opt-in. The provider receives only
+aggregate audit facts, not full record contents. External provider processing
+still has residual privacy and response-quality risks.
 
 ---
 

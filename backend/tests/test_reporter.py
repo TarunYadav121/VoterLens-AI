@@ -102,3 +102,9 @@ def test_tr07_export_summary_csv(sample_stored_analysis):
     assert len(df) == 1
     assert df.iloc[0]["analysis_id"] == "ANALYSIS-SAMPLE"
     assert df.iloc[0]["added"] == sample_stored_analysis.comparison_result.summary.added
+
+
+def test_record_export_escapes_spreadsheet_formula_prefix(sample_stored_analysis):
+    sample_stored_analysis.comparison_result.added[0].data["name"] = "=HYPERLINK(\"https://example.test\")"
+    csv_str = reporter.export_added_csv(sample_stored_analysis)
+    assert "'=HYPERLINK" in csv_str

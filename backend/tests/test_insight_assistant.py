@@ -251,17 +251,44 @@ def test_chat_with_mocked_gemini(sample_stored_analysis):
         "which exceeds the baseline of 10.0%. These findings are statistical signals for review, "
         "not proof of wrongdoing."
     )
-    with patch.object(insight_assistant, "GEMINI_API_KEY", "fake_test_key"), \
+    with patch.object(insight_assistant, "AI_PROVIDER", "gemini"), \
+         patch.object(insight_assistant, "GEMINI_API_KEY", "fake_test_key"), \
          patch.object(insight_assistant, "_call_gemini", return_value=mock_text):
         result = insight_assistant.handle_chat_message(
             stored=sample_stored_analysis,
             message="Summarize the removals in North Valley",
             language="en",
+            allow_external_ai=True,
         )
         assert result["status"] == "success"
         assert result["source"] == "ai_gemini"
         assert "A01" in result["answer"] or "North Valley" in result["answer"]
         assert "disclaimer" in result
+
+
+def test_external_ai_is_disabled_without_explicit_opt_in(sample_stored_analysis):
+    with patch.object(insight_assistant, "GEMINI_API_KEY", "fake_test_key"), \
+         patch.object(insight_assistant, "_call_gemini") as call_gemini:
+        result = insight_assistant.handle_chat_message(
+            stored=sample_stored_analysis,
+            message="Summarize the removals",
+            language="en",
+        )
+    call_gemini.assert_not_called()
+    assert result["source"] == "deterministic_fallback"
+
+
+def test_unsafe_external_answer_falls_back(sample_stored_analysis):
+    with patch.object(insight_assistant, "GEMINI_API_KEY", "fake_test_key"), \
+         patch.object(insight_assistant, "_call_gemini", return_value="Area A01 committed fraud and is guilty."):
+        result = insight_assistant.handle_chat_message(
+            stored=sample_stored_analysis,
+            message="Summarize the findings",
+            language="en",
+            allow_external_ai=True,
+        )
+    assert result["source"] == "deterministic_fallback"
+    assert "guilty" not in result["answer"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +353,50 @@ def test_api_chat_message_valid(flask_client, sample_stored_analysis):
     assert data["status"] == "success"
     assert "answer" in data
     assert "disclaimer" in data
+
+
+def test_api_chat_message_preserves_conversation_id_and_hinglish_answer(flask_client, sample_stored_analysis):
+    flask_client.application.analysis_store[sample_stored_analysis.analysis_id] = sample_stored_analysis
+    first = flask_client.post(
+        "/api/chat/message",
+        json={
+            "analysis_id": sample_stored_analysis.analysis_id,
+            "message": "Which areas have unusual removal rates?",
+            "language": "en",
+        },
+    )
+    assert first.status_code == 200
+    conversation_id = first.get_json()["conversation_id"]
+    assert conversation_id
+
+    second = flask_client.post(
+        "/api/chat/message",
+        json={
+            "analysis_id": sample_stored_analysis.analysis_id,
+            "message": "Kya yeh fraud ka proof hai?",
+            "language": "en",
+            "conversation_id": conversation_id,
+            "allow_external_ai": False,
+        },
+    )
+    assert second.status_code == 200
+    data = second.get_json()
+    assert data["conversation_id"] == conversation_id
+    assert "fraud" in data["answer"].lower() or "human review" in data["answer"].lower()
+
+
+def test_api_chat_message_rejects_non_boolean_external_opt_in(flask_client, sample_stored_analysis):
+    flask_client.application.analysis_store[sample_stored_analysis.analysis_id] = sample_stored_analysis
+    response = flask_client.post(
+        "/api/chat/message",
+        json={
+            "analysis_id": sample_stored_analysis.analysis_id,
+            "message": "Summarize the audit",
+            "allow_external_ai": "yes",
+        },
+    )
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "INVALID_EXTERNAL_AI_OPT_IN"
 
 
 def test_api_chat_message_empty(flask_client, sample_stored_analysis):

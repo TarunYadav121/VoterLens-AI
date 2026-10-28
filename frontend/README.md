@@ -1,16 +1,85 @@
-# React + Vite
+# VoterLens AI Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React/Vite frontend provides the VoterLens AI synthetic electoral-roll
+comparison dashboard. It uploads two CSV releases to the Flask backend and
+displays deterministic comparison counts, evidence-backed findings, area
+analytics, record diffs, counterfactual checks, multilingual explanations,
+the synthetic false-alarm benchmark, and CSV reports.
 
-Currently, two official plugins are available:
+## Conversational assistant
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The assistant supports deterministic, allowlisted commands without Gemini:
 
-## React Compiler
+- Show findings or open the highest-priority finding.
+- Inspect a record returned by the active analysis.
+- Recheck the selected finding.
+- Explain a returned finding's calculation.
+- Navigate to a supported section or download a supported CSV report.
+- Propose a change to an editable field in the current synthetic draft.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Draft edits always show a before/after confirmation card. Confirmed edits
+create a new browser-session draft, preserve the original file, rerun the
+normal analysis endpoint, and can be undone one change at a time. Unknown,
+duplicate, or invalid records are rejected rather than guessed. This is a
+session-level prototype history, not an official correction or certified audit
+trail.
 
-## Expanding the Oxlint configuration
+## Local setup
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The backend should be running at `http://127.0.0.1:5000` first:
+
+```bash
+cd backend
+source venv/bin/activate
+python app.py
+```
+
+Set `VITE_API_BASE_URL` when the backend uses another local URL. Copy
+`.env.example` to `.env.local`; do not put backend secrets in frontend
+environment files.
+
+## Checks
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+## Browser tests
+
+Browser tests use Playwright and are intentionally separate from the
+dependency-free action tests:
+
+```bash
+npm install
+npx playwright install chromium
+npm run test:e2e
+```
+
+The Playwright suite starts the local Flask backend on port `5053` and Vite on
+port `4173`. Browser binaries are installed per machine and are not committed
+to the repository. If browser installation is unavailable, report the suite as
+not run rather than treating a build or action test as browser verification.
+
+## Safety and limitations
+
+- Use synthetic demonstration data only. Do not upload real voter information.
+- Findings are statistical signals for human review, not proof of fraud or
+  wrongdoing.
+- The default assistant is deterministic and evidence-grounded. The optional
+  external-AI path requires an explicit per-chat opt-in and is configured only
+  on the backend.
+- Backend analyses are stored in a bounded in-memory LRU and disappear when
+  the backend restarts.
+- Record-level exports can contain uploaded fields and are intended only for a
+  controlled local demonstration. Authentication and authorization are required
+  before using the service with real personal data or public users.
+- The benchmark reports the actual results returned by the backend's ten
+  synthetic scenarios. It does not establish real-world electoral performance.

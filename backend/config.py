@@ -28,6 +28,7 @@ ALLOWED_EXTENSIONS = {".csv"}
 # ---------------------------------------------------------------------------
 
 MAX_STORED_ANALYSES = 10   # LRU eviction when exceeded
+MAX_STORED_UPLOAD_BYTES = 100 * 1024 * 1024  # estimated input bytes retained
 
 # ---------------------------------------------------------------------------
 # CSV schema — required columns
@@ -307,7 +308,7 @@ GENERATOR_POPULATION_GROUPS = {
 # AI Insight Assistant configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_AI_PROVIDER = "gemini"
+DEFAULT_AI_PROVIDER = "none"
 DEFAULT_AI_MODEL = "gemini-2.0-flash"
 DEFAULT_AI_MAX_TOKENS = 1024
 DEFAULT_AI_TIMEOUT_SECONDS = 30

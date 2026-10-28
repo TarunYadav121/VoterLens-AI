@@ -16,6 +16,10 @@ import {
   recheckFinding, runChallenge,
 } from './api/client'
 import {
+  ASSISTANT_ACTIONS, parseAssistantCommand, serializeCsv, parseCsv,
+  validateAssistantAction, highestFinding, applyDraftChange,
+} from './assistant/actions'
+import {
   findingMetric, formatNumber, formatPercent, formatTimestamp, reconcileCounts,
   recordLists,
 } from './utils/audit'
@@ -44,6 +48,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [draftHistory, setDraftHistory] = useState([])
 
   const checkHealth = useCallback(async (signal) => {
     try {
@@ -73,6 +78,7 @@ function App() {
       navigate('overview')
       setNotice({ kind: 'success', text: `Analysis ${analysis.analysis_id} completed.` })
     } catch (error) {
+      setWorkspace((current) => ({ ...current, analysis: null, selectedFinding: null }))
       setError(error)
     } finally {
       setLoading(false)
@@ -90,6 +96,49 @@ function App() {
       setError(error)
       setLoading(false)
     }
+  }
+
+  async function applyDraftEdit(edit) {
+    if (!workspace.previousFile || !workspace.currentFile) throw new Error('The original uploaded files are no longer available in this browser session.')
+    const beforeFile = workspace.currentFile
+    const rows = parseCsv(await beforeFile.text())
+    const changed = applyDraftChange(rows, edit)
+    const nextFile = new File([serializeCsv(changed.rows)], beforeFile.name, { type: 'text/csv' })
+    setLoading(true)
+    try {
+      const nextAnalysis = await analyzeFiles(workspace.previousFile, nextFile)
+      setDraftHistory((history) => [...history, { ...edit, previousValue: changed.previousValue, nextValue: changed.nextValue, beforeFile }])
+      setWorkspace((current) => ({ ...current, currentFile: nextFile, analysis: nextAnalysis, selectedFinding: null }))
+      setNotice({ kind: 'success', text: 'Draft revision applied and re-analyzed. Original files remain unchanged.' })
+      return nextAnalysis
+    } catch (error) {
+      setWorkspace((current) => ({ ...current, analysis: null, selectedFinding: null }))
+      setNotice({ kind: 'error', text: `Draft analysis failed: ${error.message}. The draft file is retained, but no analysis is current.` })
+      throw error
+    } finally { setLoading(false) }
+  }
+
+  async function undoDraftEdit() {
+    const last = draftHistory.at(-1)
+    if (!last || !workspace.previousFile) throw new Error('There is no confirmed draft change to undo.')
+    setLoading(true)
+    try {
+      const restoredAnalysis = await analyzeFiles(workspace.previousFile, last.beforeFile)
+      setDraftHistory((history) => history.slice(0, -1))
+      setWorkspace((current) => ({ ...current, currentFile: last.beforeFile, analysis: restoredAnalysis, selectedFinding: null }))
+      setNotice({ kind: 'success', text: 'The latest draft change was undone and the prior draft was re-analyzed.' })
+      return restoredAnalysis
+    } finally { setLoading(false) }
+  }
+
+  function downloadDraftCsv() {
+    if (!workspace.currentFile || draftHistory.length === 0) throw new Error('Confirm a draft change before downloading the revised synthetic CSV.')
+    const url = URL.createObjectURL(workspace.currentFile)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'voterlens-revised-synthetic-current.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
 
   function resetWorkspace() {
@@ -149,6 +198,13 @@ function App() {
           onNavigate={navigate}
           onLoadSample={loadSample}
           isAppLoading={loading}
+          selectedFinding={workspace.selectedFinding}
+          page={page}
+          onSelectFinding={(finding) => { setWorkspace((current) => ({ ...current, selectedFinding: finding })); navigate('findings') }}
+          onApplyDraftEdit={applyDraftEdit}
+          onUndoDraftEdit={undoDraftEdit}
+          onDownloadDraft={downloadDraftCsv}
+          draftHistory={draftHistory}
         />
       </ErrorBoundary>
       {resetOpen && <ConfirmDialog onCancel={() => setResetOpen(false)} onConfirm={resetWorkspace} />}
@@ -277,7 +333,7 @@ function Findings({ analysis, selectedFinding, onSelect }) {
 }
 
 function FindingCard({ finding, selected, onSelect, onRecheck, recheck }) {
-  return <button className={`finding-card ${selected ? 'selected' : ''}`} onClick={onSelect}><div className="finding-card-top"><span className={`priority ${finding.review_priority?.toLowerCase()}`}>{finding.review_priority} review</span><span className="category-label">{finding.category === 'DATA_QUALITY' ? 'Data quality' : 'Area pattern'}</span></div><h3>{finding.title}</h3><p>{finding.description}</p><div className="finding-meta"><span>{finding.finding_id}</span><span>{finding.affected_record_count} record{finding.affected_record_count === 1 ? '' : 's'}</span>{finding.affected_area_id && <span>{finding.affected_area_id}</span>}</div><div className="finding-actions"><span>Open Evidence Passport →</span><button type="button" className="mini-button" onClick={(event) => { event.stopPropagation(); onRecheck() }} disabled={recheck?.loading}>{recheck?.loading ? 'Checking…' : 'Recheck'}</button>{recheck?.result && <span className={recheck.result.match ? 'recheck-pass' : 'recheck-fail'}>{recheck.result.match ? 'Match' : 'Mismatch'}</span>}</div>{recheck?.error && <span className="inline-error">{recheck.error}</span>}</button>
+  return <div className={`finding-card ${selected ? 'selected' : ''}`} role="button" tabIndex={0} onClick={onSelect} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect() } }}><div className="finding-card-top"><span className={`priority ${finding.review_priority?.toLowerCase()}`}>{finding.review_priority} review</span><span className="category-label">{finding.category === 'DATA_QUALITY' ? 'Data quality' : 'Area pattern'}</span></div><h3>{finding.title}</h3><p>{finding.description}</p><div className="finding-meta"><span>{finding.finding_id}</span><span>{finding.affected_record_count} record{finding.affected_record_count === 1 ? '' : 's'}</span>{finding.affected_area_id && <span>{finding.affected_area_id}</span>}</div><div className="finding-actions"><span>Open Evidence Passport →</span><button type="button" className="mini-button" onClick={(event) => { event.stopPropagation(); onRecheck() }} disabled={recheck?.loading}>{recheck?.loading ? 'Checking…' : 'Recheck'}</button>{recheck?.result && <span className={recheck.result.match ? 'recheck-pass' : 'recheck-fail'}>{recheck.result.match ? 'Match' : 'Mismatch'}</span>}</div>{recheck?.error && <span className="inline-error">{recheck.error}</span>}</div>
 }
 
 function EvidencePassport({ finding, passport, analysis, recheck }) {
@@ -365,7 +421,8 @@ function Benchmark({ onError }) {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   async function run() { setLoading(true); try { setResult(await runChallenge()) } catch (error) { onError(error) } finally { setLoading(false) } }
-  return <section className="page-section"><PageIntro eyebrow="FALSE-ALARM BENCHMARK" title="Ten controlled synthetic scenarios" text="Metrics below come directly from POST /api/challenge/run. They are not a guarantee of real-world electoral performance." /><button className="button primary" disabled={loading} onClick={run}>{loading ? <><RefreshCw className="spin" size={17} /> Running…</> : <><FlaskConical size={17} /> Run benchmark</>}</button>{result && <><div className="metric-grid benchmark-grid">{[['Total scenarios', result.total_scenarios], ['Passed', result.passed], ['Failed', result.failed], ['Precision', result.precision == null ? 'Not calculable' : `${(result.precision * 100).toFixed(1)}%`], ['Recall', result.recall == null ? 'Not calculable' : `${(result.recall * 100).toFixed(1)}%`]].map(([label, value]) => <MetricCard key={label} label={label} value={value} tone="blue" />)}</div><Panel title="Confusion counts"><div className="confusion-grid"><DataLine label="True positives" value={result.true_positives} /><DataLine label="True negatives" value={result.true_negatives} /><DataLine label="False positives" value={result.false_positives} /><DataLine label="False negatives" value={result.false_negatives} /></div>{result.disclaimer && <p className="muted">{result.disclaimer}</p>}{result.precision_note && <p className="muted">{result.precision_note}</p>}</Panel><Panel title="Scenario results"><div className="table-scroll"><table><thead><tr><th>ID</th><th>Description</th><th>Expected</th><th>Predicted</th><th>Outcome</th><th>Notes</th></tr></thead><tbody>{(result.scenarios || []).map((scenario) => <tr key={scenario.scenario_id}><td><strong>{scenario.scenario_id}</strong></td><td>{scenario.description}</td><td>{scenario.expected}</td><td>{scenario.predicted}</td><td><span className="status-text">{scenario.outcome}</span></td><td>{scenario.notes}</td></tr>)}</tbody></table></div></Panel></>}</section>
+  const scenarios = Array.isArray(result?.scenario_results) ? result.scenario_results : []
+  return <section className="page-section"><PageIntro eyebrow="FALSE-ALARM BENCHMARK" title="Ten controlled synthetic scenarios" text="Metrics below come directly from POST /api/challenge/run. They are not a guarantee of real-world electoral performance." /><button className="button primary" disabled={loading} onClick={run}>{loading ? <><RefreshCw className="spin" size={17} /> Running…</> : <><FlaskConical size={17} /> Run benchmark</>}</button>{result && <><div className="metric-grid benchmark-grid">{[['Total scenarios', result.total_scenarios], ['Passed', result.passed], ['Failed', result.failed], ['Precision', result.precision == null ? 'Not calculable' : `${(result.precision * 100).toFixed(1)}%`], ['Recall', result.recall == null ? 'Not calculable' : `${(result.recall * 100).toFixed(1)}%`]].map(([label, value]) => <MetricCard key={label} label={label} value={value} tone="blue" />)}</div><Panel title="Confusion counts"><div className="confusion-grid"><DataLine label="True positives" value={result.true_positives} /><DataLine label="True negatives" value={result.true_negatives} /><DataLine label="False positives" value={result.false_positives} /><DataLine label="False negatives" value={result.false_negatives} /></div>{result.disclaimer && <p className="muted">{result.disclaimer}</p>}{result.precision_note && <p className="muted">{result.precision_note}</p>}</Panel><Panel title="Scenario results"><div className="table-scroll"><table><thead><tr><th>ID</th><th>Description</th><th>Expected</th><th>Predicted</th><th>Outcome</th><th>Notes</th></tr></thead><tbody>{scenarios.map((scenario) => <tr key={scenario.scenario_id}><td><strong>{scenario.scenario_id}</strong></td><td>{scenario.description || 'Not supplied'}</td><td>{scenario.expected || 'Not supplied'}</td><td>{scenario.predicted || 'Not supplied'}</td><td><span className="status-text">{scenario.outcome || 'Not supplied'}</span></td><td>{scenario.notes || 'Not supplied'}</td></tr>)}</tbody></table></div>{!scenarios.length && <p className="muted">No scenario results were returned.</p>}</Panel></>}</section>
 }
 
 function Reports({ analysis, onError }) {
@@ -387,14 +444,42 @@ function ListBlock({ title, items }) { return <div className="list-block"><stron
 function NoticeText({ text }) { return <div className="passport-notice"><AlertTriangle size={15} />{text}</div> }
 function EmptyState({ title, text, action, onAction }) { return <div className="empty-state"><Database size={26} /><h2>{title}</h2><p>{text}</p>{action && <button className="button secondary" onClick={onAction}>{action}</button>}</div> }
 function valueOrUnavailable(value) { return value === undefined || value === null || value === '' ? 'Not available' : String(value) }
-function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSample, isAppLoading }) {
+let nextChatMessageId = 0
+function nextChatId(prefix) {
+  nextChatMessageId += 1
+  return `${prefix}-${nextChatMessageId}`
+}
+function chatMessageRecord(id, role, text, extra = {}) {
+  return {
+    id,
+    role,
+    text,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    ...extra,
+  }
+}
+function formatRecordResult(result) {
+  const changed = result.changed_fields?.length ? result.changed_fields.join(', ') : 'no changed fields'
+  return `Record ${result.record_id} is ${result.change_category}. Changed fields: ${changed}. Review actions: ${(result.recommended_review_actions || []).join(' ') || 'not supplied by the backend.'}`
+}
+function formatCalculation(finding) {
+  const evidence = finding.supporting_evidence || {}
+  const observed = finding.baseline == null ? 'not available' : `${finding.baseline}`
+  const threshold = finding.threshold == null ? 'not available' : `${finding.threshold}`
+  return `${finding.title} (${finding.finding_id}). Observed evidence: ${JSON.stringify(evidence)}. Baseline: ${observed}. Threshold: ${threshold}. These values are reported for review; missing denominator or rule details are not inferred.`
+}
+function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSample, isAppLoading, selectedFinding, page, onSelectFinding, onApplyDraftEdit, onUndoDraftEdit, onDownloadDraft, draftHistory }) {
   const [language, setLanguage] = useState('en')
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [conversationId, setConversationId] = useState(null)
+  const [allowExternalAi, setAllowExternalAi] = useState(false)
+  const [pendingEdit, setPendingEdit] = useState(null)
+  const [actionNotice, setActionNotice] = useState(null)
   const [loadedAnalysisKey, setLoadedAnalysisKey] = useState(null)
   const messagesEndRef = useRef(null)
+  const shortcutRecordId = recordLists(analysis || {}).find((record) => record.record_id)?.record_id
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -408,24 +493,18 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
       setLoadedAnalysisKey(`${analysisId}-${lang}`)
       setMessages([
         {
-          id: `summary-${Date.now()}`,
-          role: 'assistant',
-          text: res.summary,
-          disclaimer: res.disclaimer,
-          source: res.source,
-          suggestedQuestions: res.suggested_questions || [],
-          evidenceReferences: res.evidence_references || [],
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          ...chatMessageRecord(nextChatId('summary'), 'assistant', res.summary, {
+            disclaimer: res.disclaimer,
+            source: res.source,
+            suggestedQuestions: res.suggested_questions || [],
+            evidenceReferences: res.evidence_references || [],
+          }),
         },
       ])
     } catch (err) {
       setMessages([
         {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          text: `Unable to load analysis summary: ${err.message}`,
-          isError: true,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          ...chatMessageRecord(nextChatId('err'), 'assistant', `Unable to load analysis summary: ${err.message}`, { isError: true }),
         },
       ])
     } finally {
@@ -437,7 +516,8 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
     if (isOpen && analysis?.analysis_id) {
       const currentKey = `${analysis.analysis_id}-${language}`
       if (loadedAnalysisKey !== currentKey) {
-        loadSummary(analysis.analysis_id, language)
+        const timer = window.setTimeout(() => loadSummary(analysis.analysis_id, language), 0)
+        return () => window.clearTimeout(timer)
       }
     }
   }, [isOpen, analysis?.analysis_id, language, loadedAnalysisKey, loadSummary])
@@ -446,45 +526,138 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
     const q = (text || input).trim()
     if (!q || !analysis?.analysis_id || loading) return
 
-    const userMessage = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text: q,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    const parsedAction = parseAssistantCommand(q, selectedFinding?.finding_id)
+    const actionCheck = parsedAction && validateAssistantAction(parsedAction, { analysis, page, hasConfirmedDraft: draftHistory.length > 0 })
+    if (parsedAction && !actionCheck.valid) {
+      setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', actionCheck.message, { isError: true })])
+      setInput('')
+      return
     }
+    if (parsedAction) {
+      setMessages((prev) => [...prev, chatMessageRecord(nextChatId('u'), 'user', q)])
+      setInput('')
+      await executeAssistantAction(parsedAction)
+      return
+    }
+
+    const userMessage = chatMessageRecord(nextChatId('u'), 'user', q)
 
     setMessages((prev) => [...prev, userMessage])
     setInput('')
     setLoading(true)
 
     try {
-      const res = await chatMessage(analysis.analysis_id, q, language, conversationId)
+      const res = await chatMessage(analysis.analysis_id, q, language, conversationId, allowExternalAi)
       if (res.conversation_id) setConversationId(res.conversation_id)
 
-      const botMessage = {
-        id: `a-${Date.now()}`,
-        role: 'assistant',
-        text: res.answer,
+      const botMessage = chatMessageRecord(nextChatId('a'), 'assistant', res.answer, {
         disclaimer: res.disclaimer,
         source: res.source,
         suggestedQuestions: res.suggested_questions || [],
         evidenceReferences: res.evidence_references || [],
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
+      })
       setMessages((prev) => [...prev, botMessage])
     } catch (err) {
       setMessages((prev) => [
         ...prev,
         {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          text: `Chat request failed: ${err.message}`,
-          isError: true,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          ...chatMessageRecord(nextChatId('err'), 'assistant', `Chat request failed: ${err.message}`, { isError: true }),
         },
       ])
     } finally {
       setLoading(false)
+    }
+
+    async function executeAssistantAction(action) {
+      try {
+        if (action.type === ASSISTANT_ACTIONS.NAVIGATE_TO) {
+          onNavigate(action.payload.page)
+          setActionNotice('Opened the requested section.')
+        } else if (action.type === ASSISTANT_ACTIONS.SHOW_FINDINGS) {
+          onNavigate('findings')
+          setActionNotice(`${analysis.findings?.length || 0} findings are available in the Findings section.`)
+        } else if (action.type === ASSISTANT_ACTIONS.SELECT_FINDING) {
+          const finding = action.payload.highestPriority ? highestFinding(analysis.findings) : selectedFinding
+          if (!finding) throw new Error('No finding is available in this analysis.')
+          onSelectFinding(finding)
+          setActionNotice(`Opened ${finding.finding_id}. Priority is shown for review routing, not proof of cause.`)
+        } else if (action.type === ASSISTANT_ACTIONS.SELECT_AREA) {
+          const area = (analysis.area_comparison || []).find((item) => item.area_id.toUpperCase() === action.payload.areaId)
+          if (!area) throw new Error(`Area ${action.payload.areaId} was not found in the active analysis.`)
+          const areaFinding = analysis.findings?.find((finding) => finding.affected_area_id === area.area_id)
+          if (areaFinding) onSelectFinding(areaFinding)
+          else onNavigate('areas')
+          setActionNotice(`${area.area_name} (${area.area_id}) is available with its returned area metrics${areaFinding ? ` and finding ${areaFinding.finding_id}` : ''}.`)
+        } else if (action.type === ASSISTANT_ACTIONS.COMPARE_AREA) {
+          const area = (analysis.area_comparison || []).find((item) => item.area_id.toUpperCase() === action.payload.areaId)
+          if (!area) throw new Error(`Area ${action.payload.areaId} was not found in the active analysis.`)
+          const result = await compareAreas({ analysis_id: analysis.analysis_id, area_id: area.area_id, comparison_method: 'all_areas' })
+          onNavigate('counterfactual')
+          setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', `Comparison for ${area.area_name} (${area.area_id}) completed using all other areas. ${result.explanation || 'See Counterfactual Audit Lab for the returned rates.'}`, { actionResult: result })])
+      } else if (action.type === ASSISTANT_ACTIONS.OPEN_EVIDENCE) {
+          const finding = analysis.findings?.find((item) => item.finding_id === action.payload.findingId)
+          if (!finding) throw new Error('That finding is no longer available in the active analysis.')
+          onSelectFinding(finding)
+          setActionNotice(`Opened the evidence context for ${finding.finding_id}.`)
+        } else if (action.type === ASSISTANT_ACTIONS.INSPECT_RECORD) {
+          const result = await getRecord(analysis.analysis_id, action.payload.recordId)
+          setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', formatRecordResult(result), { actionResult: result })])
+        } else if (action.type === ASSISTANT_ACTIONS.RECHECK_FINDING) {
+          const findingId = action.payload.findingId || selectedFinding?.finding_id
+          if (!findingId) throw new Error('Select a finding first, then ask me to recheck it.')
+          const result = await recheckFinding({ analysis_id: analysis.analysis_id, finding_id: findingId })
+          setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', `Recheck completed for ${findingId}. Match: ${result.match === null ? 'not available' : result.match ? 'yes' : 'no'}. Dataset changed: ${result.dataset_changed ? 'yes' : 'no'}.`, { actionResult: result })])
+        } else if (action.type === ASSISTANT_ACTIONS.EXPORT_REPORT) {
+          const result = await downloadExport(analysis.analysis_id, action.payload.reportType)
+          const url = URL.createObjectURL(result.blob)
+          const anchor = document.createElement('a')
+          anchor.href = url; anchor.download = result.filename; anchor.click(); URL.revokeObjectURL(url)
+          setActionNotice(`${action.payload.reportType} report download started.`)
+      } else if (action.type === ASSISTANT_ACTIONS.EXPORT_DRAFT) {
+          onDownloadDraft()
+          setActionNotice('Revised synthetic CSV download started. It contains the confirmed draft revision only.')
+        } else if (action.type === ASSISTANT_ACTIONS.EXPLAIN_CALCULATION) {
+          const finding = analysis.findings?.find((item) => item.finding_id === action.payload.findingId) || selectedFinding
+          if (!finding) throw new Error('Select a finding to explain its calculation.')
+          setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', formatCalculation(finding))])
+      } else if (action.type === ASSISTANT_ACTIONS.RUN_COUNTERFACTUAL) {
+          const areaId = action.payload.areaId || analysis.area_comparison?.[0]?.area_id
+          if (!areaId) throw new Error('No area is available for a what-if comparison.')
+          const result = await compareAreas({ analysis_id: analysis.analysis_id, area_id: areaId, comparison_method: 'all_areas', threshold_override: action.payload.threshold })
+          onNavigate('counterfactual')
+          setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', `What-if comparison for ${areaId} at ${action.payload.threshold}% completed. ${result.explanation || 'See Counterfactual Audit Lab for the returned comparison.'}`, { actionResult: result })])
+        } else if (action.type === ASSISTANT_ACTIONS.PROPOSE_RECORD_EDIT) {
+          const record = await getRecord(analysis.analysis_id, action.payload.recordId)
+          const currentValue = record.current_values?.[action.payload.field] ?? record.previous_values?.[action.payload.field] ?? ''
+          setPendingEdit({ ...action.payload, previousValue: currentValue })
+        } else if (action.type === ASSISTANT_ACTIONS.UNDO_RECORD_EDIT) {
+          await onUndoDraftEdit()
+          setActionNotice('Last confirmed draft change undone. The prior draft is current.')
+        } else if (action.type === ASSISTANT_ACTIONS.SHOW_CHANGE_HISTORY) {
+          const historyText = draftHistory.length
+            ? draftHistory.map((change, index) => `${index + 1}. ${change.recordId}.${change.field}: ${valueOrUnavailable(change.previousValue)} → ${valueOrUnavailable(change.nextValue)}`).join('\n')
+            : 'No confirmed draft changes in this session.'
+          setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', historyText)])
+        } else if (action.type === ASSISTANT_ACTIONS.CLEAR_CHAT) {
+          setMessages([])
+          setConversationId(null)
+          setActionNotice('Conversation cleared. The active analysis and draft are unchanged.')
+        }
+      } catch (error) {
+        setMessages((prev) => [...prev, chatMessageRecord(nextChatId('err'), 'assistant', error.message || 'The requested operation could not be completed.', { isError: true })])
+      }
+    }
+
+  }
+
+  async function confirmEdit() {
+    try {
+      await onApplyDraftEdit(pendingEdit)
+      setMessages((prev) => [...prev, chatMessageRecord(nextChatId('a'), 'assistant', `Draft revision applied for ${pendingEdit.recordId}. This is not an official electoral-roll update.`)])
+      setActionNotice(`Draft revision applied for ${pendingEdit.recordId}. Original files remain unchanged.`)
+      setPendingEdit(null)
+    } catch (error) {
+      setActionNotice(`Draft analysis failed: ${error.message}. The draft file is retained, but no analysis is current.`)
     }
   }
 
@@ -563,6 +736,15 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
             <AlertTriangle size={13} />
             <span>Signals for review only · Does not declare fraud or identify individuals</span>
           </div>
+          <div className="chat-context-strip">
+            <span>Context: {page.replaceAll('_', ' ')}</span>
+            {selectedFinding && <span>Finding: {selectedFinding.finding_id}</span>}
+            {draftHistory.length > 0 && <span>Draft changes: {draftHistory.length}</span>}
+          </div>
+          <label className="chat-ai-opt-in">
+            <input type="checkbox" checked={allowExternalAi} onChange={(event) => setAllowExternalAi(event.target.checked)} />
+            <span>Allow optional external AI for this chat. Aggregate audit facts may be sent to the configured provider.</span>
+          </label>
 
           <div className="chat-body">
             {!analysis ? (
@@ -660,6 +842,25 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
                     )}
                   </div>
                 ))}
+                {pendingEdit && (
+                  <div className="chat-action-card" role="dialog" aria-label="Confirm draft edit">
+                    <strong>Confirm draft revision</strong>
+                    <p>{pendingEdit.recordId}: <code>{pendingEdit.field}</code> from <strong>{valueOrUnavailable(pendingEdit.previousValue)}</strong> to <strong>{pendingEdit.value}</strong></p>
+                    <small>Only the current synthetic draft will change. The original file stays unchanged and the audit will run again.</small>
+                    <div className="action-row">
+                      <button className="button primary sm" onClick={confirmEdit}>Confirm change</button>
+                      <button className="button secondary sm" onClick={() => setPendingEdit(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {actionNotice && <div className="chat-action-result" role="status">{actionNotice}<button className="text-button" onClick={() => setActionNotice(null)}>Dismiss</button></div>}
+                {draftHistory.length > 0 && (
+                  <button className="button secondary sm draft-export-button" type="button" onClick={() => {
+                    try { onDownloadDraft(); setActionNotice('Revised synthetic CSV download started.') } catch (error) { setActionNotice(error.message) }
+                  }}>
+                    <Download size={14} /> Download revised synthetic CSV
+                  </button>
+                )}
 
                 {loading && (
                   <div className="chat-message-bubble assistant loading">
@@ -705,6 +906,11 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
                   >
                     <Send size={16} />
                   </button>
+                </div>
+                <div className="chat-shortcuts">
+                  {['Show findings', shortcutRecordId ? `What changed in record ${shortcutRecordId}?` : 'Show findings', 'Recheck this finding', 'Download findings report'].map((shortcut) => (
+                    <button key={shortcut} className="suggested-chip" type="button" onClick={() => sendMessage(shortcut)} disabled={loading}>{shortcut}</button>
+                  ))}
                 </div>
                 <div className="input-meta">
                   <span>{input.length}/500 chars</span>
