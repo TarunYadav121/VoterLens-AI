@@ -474,7 +474,7 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [conversationId, setConversationId] = useState(null)
-  const [allowExternalAi, setAllowExternalAi] = useState(false)
+  const [allowExternalAi, setAllowExternalAi] = useState(true)
   const [pendingEdit, setPendingEdit] = useState(null)
   const [actionNotice, setActionNotice] = useState(null)
   const [loadedAnalysisKey, setLoadedAnalysisKey] = useState(null)
@@ -765,7 +765,7 @@ function InsightAssistantChat({ analysis, isOpen, onToggle, onNavigate, onLoadSa
                         {msg.role === 'assistant' ? (
                           <>
                             <Sparkles size={13} />
-                            {msg.source === 'ai_gemini' ? 'Gemini 2.0 Flash' : 'VoterLens Engine'}
+                            {msg.source === 'ai_gemini' ? 'Gemini AI' : 'VoterLens Engine (Deterministic)'}
                           </>
                         ) : (
                           <>

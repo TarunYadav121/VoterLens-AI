@@ -36,12 +36,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 AI_PROVIDER = os.environ.get("AI_PROVIDER", getattr(cfg, "DEFAULT_AI_PROVIDER", "none")).lower()
-AI_MODEL = os.environ.get("AI_MODEL", getattr(cfg, "DEFAULT_AI_MODEL", "gemini-2.0-flash"))
+AI_MODEL = os.environ.get("AI_MODEL", getattr(cfg, "DEFAULT_AI_MODEL", "gemini-3.8-flash"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 AI_MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", str(getattr(cfg, "DEFAULT_AI_MAX_TOKENS", 1024))))
 AI_TIMEOUT_SECONDS = int(os.environ.get("AI_TIMEOUT_SECONDS", str(getattr(cfg, "DEFAULT_AI_TIMEOUT_SECONDS", 30))))
 MAX_QUESTION_LENGTH = getattr(cfg, "MAX_QUESTION_LENGTH", 500)
 SUPPORTED_LANGUAGES = getattr(cfg, "SUPPORTED_LANGUAGES", {"en", "hi"})
+
+
+def get_ai_config() -> tuple[str, str, str, int, int]:
+    """Retrieve active AI provider configuration from globals, env, or cfg."""
+    mod = globals()
+    provider = str(mod.get("AI_PROVIDER") or os.environ.get("AI_PROVIDER", getattr(cfg, "DEFAULT_AI_PROVIDER", "none"))).lower()
+    model = str(mod.get("AI_MODEL") or os.environ.get("AI_MODEL", getattr(cfg, "DEFAULT_AI_MODEL", "gemini-3.8-flash")))
+    api_key = str(mod.get("GEMINI_API_KEY") if mod.get("GEMINI_API_KEY") is not None else os.environ.get("GEMINI_API_KEY", ""))
+    max_tokens = int(mod.get("AI_MAX_TOKENS") or os.environ.get("AI_MAX_TOKENS", str(getattr(cfg, "DEFAULT_AI_MAX_TOKENS", 1024))))
+    timeout = int(mod.get("AI_TIMEOUT_SECONDS") or os.environ.get("AI_TIMEOUT_SECONDS", str(getattr(cfg, "DEFAULT_AI_TIMEOUT_SECONDS", 30))))
+    return provider, model, api_key, max_tokens, timeout
 
 # ---------------------------------------------------------------------------
 # Prompt injection guard
@@ -382,23 +393,36 @@ def _deterministic_answer(stored: StoredAnalysis, message: str, language: str) -
 
 def _call_gemini(prompt: str) -> Optional[str]:
     """Call Google Gemini API via official SDK or REST."""
-    if not GEMINI_API_KEY:
+    provider, model_name, api_key, max_tokens, timeout = get_ai_config()
+    if not api_key:
         return None
 
     try:
         import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(AI_MODEL)
+        genai.configure(api_key=api_key, transport="rest")
+        model = genai.GenerativeModel(model_name)
         response = model.generate_content(
             prompt,
-            generation_config={"max_output_tokens": AI_MAX_TOKENS, "temperature": 0.2},
+            generation_config={"max_output_tokens": max_tokens, "temperature": 0.2},
         )
-        if response and response.text:
-            return response.text.strip()
+        if response:
+            try:
+                if response.text:
+                    return response.text.strip()
+            except (ValueError, AttributeError):
+                if getattr(response, "candidates", None):
+                    parts = []
+                    for cand in response.candidates:
+                        if getattr(cand, "content", None) and getattr(cand.content, "parts", None):
+                            for p in cand.content.parts:
+                                if getattr(p, "text", None):
+                                    parts.append(p.text)
+                    if parts:
+                        return "".join(parts).strip()
     except ImportError:
         logger.warning("google-generativeai package not installed; falling back to deterministic response.")
     except Exception as exc:
-        logger.error("Gemini API call failed: %s", exc)
+        logger.error("Gemini API call failed (%s, model=%s): %s", type(exc).__name__, model_name, exc)
 
     return None
 
@@ -407,14 +431,31 @@ def _is_unsupported_external_answer(answer: str, message: str) -> bool:
     """Reject external answers that assert blame or unsupported wrongdoing."""
     answer_lower = answer.lower()
     question_lower = message.lower()
-    accusation_terms = (
-        "committed fraud", "commit fraud", "stole the election", "rigged",
-        "criminal", "guilty", " винов", "धांधली की", "दोषी",
-    )
     asks_for_blame = any(term in question_lower for term in (
         "who committed", "who is responsible", "who did it", "किसने", "कौन दोषी",
     ))
-    return asks_for_blame or any(term in answer_lower for term in accusation_terms)
+    if asks_for_blame:
+        return True
+
+    accusation_patterns = [
+        r"\b(?:committed|commit|commits|committing)\s+fraud\b",
+        r"\bstole\s+the\s+election\b",
+        r"\b(?:is|are|was|were)\s+rigged\b",
+        r"\b(?:is|are|was|were)\s+guilty\b",
+        r"\b(?:is|are|was|were)\s+(?:a\s+)?criminal\b",
+        r"धांधली\s+की",
+        r"\bदोषी\s+है\b",
+    ]
+    for pattern in accusation_patterns:
+        match = re.search(pattern, answer_lower)
+        if match:
+            start = max(0, match.start() - 35)
+            prefix = answer_lower[start:match.start()]
+            if any(neg in prefix for neg in ("not ", "no ", "never ", "does not ", "cannot ", "without ", "not imply", "प्रमाण नहीं")):
+                continue
+            return True
+
+    return False
 
 
 def handle_chat_message(
@@ -442,7 +483,9 @@ def handle_chat_message(
     ai_used = False
     answer_text = None
 
-    if allow_external_ai and AI_PROVIDER == "gemini" and GEMINI_API_KEY:
+    provider, model_name, api_key, max_tokens, timeout = get_ai_config()
+
+    if allow_external_ai and provider == "gemini" and api_key:
         facts_json = str(facts)
         system_rules = (
             "You are the VoterLens AI Insight Assistant, an electoral roll transparency expert. "

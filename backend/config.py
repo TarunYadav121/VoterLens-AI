@@ -8,6 +8,18 @@ No magic numbers should appear in any other module.
 Import from this module instead.
 """
 
+import os
+from pathlib import Path
+
+# Automatically load .env if present
+_env_path = Path(__file__).resolve().parent / ".env"
+if _env_path.is_file():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path, override=False)
+    except ImportError:
+        pass
+
 # ---------------------------------------------------------------------------
 # Application metadata
 # ---------------------------------------------------------------------------
@@ -309,7 +321,7 @@ GENERATOR_POPULATION_GROUPS = {
 # ---------------------------------------------------------------------------
 
 DEFAULT_AI_PROVIDER = "none"
-DEFAULT_AI_MODEL = "gemini-2.0-flash"
+DEFAULT_AI_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_AI_MAX_TOKENS = 1024
 DEFAULT_AI_TIMEOUT_SECONDS = 30
 MAX_QUESTION_LENGTH = 500
